@@ -13,6 +13,6 @@
 ### Support
   If you would like to join the community, the Discord can be found at https://discord.gg/vnMART3Kqq
 
-  If you would personally like to contribute assets such as models and textures, please reach out to me!
+  If you would personally like to contribute assets such as models and textures, please reach out to woodman!
 
-  If you would like to leave a donation, I am accepting at https://ko-fi.com/therealwoodman. Thank you in advance!
+  If you would like to leave a donation, the owner is accepting at https://ko-fi.com/therealwoodman. Thank you in advance!

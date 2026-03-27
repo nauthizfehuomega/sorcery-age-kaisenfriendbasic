@@ -66,25 +66,18 @@ public class DomainTechniqueManager<T extends Enum<T>> {
             return;
         }
 
-        if (this.temporary != null && !this.remembered.contains(this.temporary)) {
-            this.temporary = null;
-            sync.run();
-        }
-
         this.timer++;
 
-        int maxScaledSize = this.scaling > 0 ? Math.max(0, (this.baseInterval - this.minInterval) / this.scaling) : this.remembered.size();
-        int effectiveSize = Math.min(this.remembered.size(), maxScaledSize);
-        int interval = Math.max(this.minInterval, this.baseInterval - (effectiveSize * this.scaling));
+        int interval = Math.max(this.minInterval, this.baseInterval - (this.remembered.size() * this.scaling));
         if (this.timer < interval) {
             return;
         }
 
+        this.timer = 0;
+
         if (isChanneling && channelTicks < this.maxChannelTicks) {
             return;
         }
-
-        this.timer = 0;
 
         this.rebuildCache();
         if (this.cache.isEmpty()) {
@@ -93,13 +86,7 @@ public class DomainTechniqueManager<T extends Enum<T>> {
 
         T next;
         if (this.randomMode) {
-            if (this.cache.size() > 1) {
-                do {
-                    next = this.cache.get(this.random.nextInt(this.cache.size()));
-                } while (next == this.temporary);
-            } else {
-                next = this.cache.get(0);
-            }
+            next = this.cache.get(this.random.nextInt(this.cache.size()));
         } else {
             this.index = (this.index + 1) % this.cache.size();
             next = this.cache.get(this.index);
@@ -117,7 +104,6 @@ public class DomainTechniqueManager<T extends Enum<T>> {
         }
         this.cache.clear();
         this.cache.addAll(this.remembered);
-        this.index = -1;
         this.dirty = false;
     }
 
@@ -141,28 +127,19 @@ public class DomainTechniqueManager<T extends Enum<T>> {
             }
         }
         this.dirty = true;
-        this.rebuildCache();
     }
 
     public void loadFromOrdinals(ListTag tag) {
         this.remembered.clear();
         T[] values = this.enumClass.getEnumConstants();
-        if (values == null) {
-            this.dirty = true;
-            this.rebuildCache();
-            return;
-        }
 
         for (Tag entry : tag) {
-            if (entry instanceof IntTag intTag) {
-                int id = intTag.getAsInt();
-                if (id >= 0 && id < values.length) {
-                    this.remembered.add(values[id]);
-                }
+            int id = ((IntTag) entry).getAsInt();
+            if (id >= 0 && id < values.length) {
+                this.remembered.add(values[id]);
             }
         }
         this.dirty = true;
-        this.rebuildCache();
     }
 
     public void setRandomMode(boolean randomMode) {
