@@ -53,6 +53,7 @@ import radon.jujutsu_kaisen.util.EntityUtil;
 import radon.jujutsu_kaisen.util.HelperMethods;
 import radon.jujutsu_kaisen.util.PlayerUtil;
 import radon.jujutsu_kaisen.util.SorcererUtil;
+import radon.jujutsu_kaisen.util.DomainTechniqueManager;
 import virtuoel.pehkui.api.ScaleData;
 import virtuoel.pehkui.api.ScaleTypes;
 
@@ -78,6 +79,7 @@ public class SorcererData implements ISorcererData {
 
     private Set<CursedTechnique> copied;
     private @Nullable CursedTechnique currentCopied;
+    private final DomainTechniqueManager<CursedTechnique> domainManager;
 
     private Set<CursedTechnique> stolen;
     private @Nullable CursedTechnique currentStolen;
@@ -172,6 +174,7 @@ public class SorcererData implements ISorcererData {
         this.copied = new LinkedHashSet<>();
         this.absorbed = new LinkedHashSet<>();
         this.stolen = new LinkedHashSet<>();
+        this.domainManager = new DomainTechniqueManager<>(CursedTechnique.class);
 
 
         this.output = 1.0F;
@@ -306,6 +309,24 @@ public class SorcererData implements ISorcererData {
         } else {
             this.charge = 0;
         }
+    }
+
+    private boolean isDomainActive() {
+        if (this.technique == null) {
+            return false;
+        }
+        Ability domain = this.technique.getDomain();
+        if (this.technique == CursedTechnique.BRAIN_TRANSPLANT && this.getCurrentStolen() != null) {
+            domain = this.getCurrentStolen().getDomain();
+        }
+        return domain != null && this.toggled.contains(domain);
+    }
+
+    private void updateDomainCycle() {
+        if (this.owner == null || this.owner.level().isClientSide) {
+            return;
+        }
+        this.domainManager.tick(this.isDomainActive(), this.channeled != null, this.charge, this::sync);
     }
 
      private void updateSummons() {
@@ -452,6 +473,7 @@ public class SorcererData implements ISorcererData {
         this.updateTickEvents();
         this.updateToggled();
         this.updateChanneled();
+        this.updateDomainCycle();
         this.updateDisrupted();
 
         this.updateRequestExpirations();
@@ -965,9 +987,9 @@ public class SorcererData implements ISorcererData {
     @Override
     public float getAbilityPower() {
         float power = this.getRealPower() * this.getOutput();
-        CursedTechnique tech = this.technique;
+        CursedTechnique tech = this.getTechnique();
         if (tech != null) {
-                Ability domain = this.technique.getDomain();
+                Ability domain = tech.getDomain();
 
                 if (tech == CursedTechnique.BRAIN_TRANSPLANT && this.getCurrentStolen() != null ) {
                     domain = this.getCurrentStolen().getDomain();
@@ -1034,7 +1056,8 @@ public class SorcererData implements ISorcererData {
     }
 
     public @Nullable CursedTechnique getTechnique() {
-        return this.technique;
+        CursedTechnique temporary = this.domainManager.getTemporary();
+        return temporary != null ? temporary : this.technique;
     }
 
     @Override
@@ -1490,6 +1513,7 @@ public float getMaxEnergy() {
     @Override
     public void copy(@Nullable CursedTechnique technique) {
         this.copied.add(technique);
+        this.domainManager.remember(technique);
     }
 
     @Override
@@ -1510,6 +1534,21 @@ public float getMaxEnergy() {
             return Set.of();
         }
         return this.copied;
+    }
+
+    @Override
+    public Set<CursedTechnique> getRemembered() {
+        return this.domainManager.getRemembered();
+    }
+
+    @Override
+    public void setTemporaryTechnique(@Nullable CursedTechnique technique) {
+        this.domainManager.setTemporary(technique);
+    }
+
+    @Override
+    public @Nullable CursedTechnique getTemporaryTechnique() {
+        return this.domainManager.getTemporary();
     }
 
     @Override
@@ -2268,6 +2307,7 @@ public float getMaxEnergy() {
             copiedTag.add(IntTag.valueOf(technique.ordinal()));
         }
         nbt.put("copied", copiedTag);
+        nbt.put("remembered_techniques", this.domainManager.saveAsNames());
 
          ListTag stolenTag = new ListTag();
 
@@ -2467,6 +2507,14 @@ public float getMaxEnergy() {
 
         for (Tag tag : nbt.getList("copied", Tag.TAG_INT)) {
             this.copied.add(CursedTechnique.values()[((IntTag) tag).getAsInt()]);
+        }
+
+        ListTag rememberedNames = nbt.getList("remembered_techniques", Tag.TAG_STRING);
+        if (!rememberedNames.isEmpty()) {
+            this.domainManager.loadFromNames(rememberedNames);
+        } else {
+            // Backwards compatibility for early saves that stored ordinals.
+            this.domainManager.loadFromOrdinals(nbt.getList("remembered_techniques", Tag.TAG_INT));
         }
 
         this.stolen.clear();

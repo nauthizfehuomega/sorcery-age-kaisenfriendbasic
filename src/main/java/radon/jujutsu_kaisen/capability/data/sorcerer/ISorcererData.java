@@ -313,10 +313,15 @@ public interface ISorcererData {
     void setCopies(Set<CursedTechnique> copiedTechs);
 
     Set<CursedTechnique> getCopied();
+    Set<CursedTechnique> getRemembered();
 
     void setCurrentCopied(@Nullable CursedTechnique technique);
 
     @Nullable CursedTechnique getCurrentCopied();
+
+    void setTemporaryTechnique(@Nullable CursedTechnique technique);
+
+    @Nullable CursedTechnique getTemporaryTechnique();
 
     void absorb(@Nullable CursedTechnique technique);
 
