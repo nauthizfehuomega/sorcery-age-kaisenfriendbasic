@@ -23,7 +23,7 @@ public class AngelWings extends Transformation {
     @Override
     public boolean isValid(LivingEntity owner) {
         ISorcererData cap = owner.getCapability(SorcererDataHandler.INSTANCE).resolve().orElseThrow();
-        return cap.getTechnique() == CursedTechnique.ANGEL && super.isValid(owner);
+        return cap.hasTechnique(CursedTechnique.ANGEL) && super.isValid(owner);
     }
 
     private static double getDistanceGround(LivingEntity entity) {
