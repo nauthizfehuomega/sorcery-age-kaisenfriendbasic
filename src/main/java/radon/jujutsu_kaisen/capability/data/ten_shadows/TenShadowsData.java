@@ -18,21 +18,28 @@ import radon.jujutsu_kaisen.ability.IAdditionalAdaptation;
 import radon.jujutsu_kaisen.ability.JJKAbilities;
 import radon.jujutsu_kaisen.ability.base.Ability;
 import radon.jujutsu_kaisen.capability.data.sorcerer.*;
-import radon.jujutsu_kaisen.capability.data.ten_shadows.Adaptation.Type;
 import radon.jujutsu_kaisen.config.ConfigHolder;
 import radon.jujutsu_kaisen.damage.JJKDamageSources;
-import radon.jujutsu_kaisen.entity.ten_shadows.MahoragaEntity;
 import radon.jujutsu_kaisen.entity.ten_shadows.WheelEntity;
 
-import java.io.ObjectInputFilter.Config;
 import java.util.*;
 
 public class TenShadowsData implements ITenShadowsData {
+    private static final float PROGRESS_STEP = 0.05F;
+    private static final int PROGRESS_INTERVAL_TICKS = 20 * 20;
+    private static final long DECAY_DELAY_TICKS = 60 * 20L;
+    private static final float DECAY_STEP = 0.05F;
+    private static final int DECAY_INTERVAL_TICKS = 20 * 20;
+
     private final Set<ResourceLocation> tamed;
     private final Set<ResourceLocation> dead;
     private final List<ItemStack> shadowInventory;
+    // Legacy maps kept for migration compatibility.
     private final Map<Adaptation, Integer> adapted;
     private final Map<Adaptation, Integer> adapting;
+    private final Map<Adaptation, Float> adaptationProgress;
+    private final Map<Adaptation, Integer> adaptationTickBuffer;
+    private final Map<Adaptation, Long> adaptationLastCombatTick;
     private final Map<Adaptation, Integer> adaptationCD = new HashMap<>();
 
     private TenShadowsMode mode;
@@ -45,12 +52,47 @@ public class TenShadowsData implements ITenShadowsData {
         this.dead = new HashSet<>();
         this.adapted = new HashMap<>();
         this.adapting = new HashMap<>();
+        this.adaptationProgress = new HashMap<>();
+        this.adaptationTickBuffer = new HashMap<>();
+        this.adaptationLastCombatTick = new HashMap<>();
         this.shadowInventory = new ArrayList<>();
     }
 
     @Override
     public void resetAdaptations() {
         this.adapted.clear();
+        this.adapting.clear();
+        this.adaptationProgress.clear();
+        this.adaptationTickBuffer.clear();
+        this.adaptationLastCombatTick.clear();
+        this.adaptationCD.clear();
+    }
+
+    private float clampProgress(float value) {
+        return Math.max(0.0F, Math.min(1.0F, value));
+    }
+
+    private float getProgress(Adaptation adaptation) {
+        return this.adaptationProgress.getOrDefault(adaptation, 0.0F);
+    }
+
+    private void setProgress(Adaptation adaptation, float value) {
+        float clamped = this.clampProgress(value);
+        if (clamped <= 0.0F) {
+            this.adaptationProgress.remove(adaptation);
+            this.adapted.remove(adaptation);
+            return;
+        }
+        this.adaptationProgress.put(adaptation, clamped);
+        if (clamped >= 1.0F) {
+            this.adapted.put(adaptation, Math.max(1, this.adapted.getOrDefault(adaptation, 0)));
+        } else {
+            this.adapted.remove(adaptation);
+        }
+    }
+
+    private boolean isFullyAdapted(Adaptation adaptation) {
+        return this.getProgress(adaptation) >= 1.0F;
     }
 
     private void updateAdaptation() {
@@ -59,66 +101,84 @@ public class TenShadowsData implements ITenShadowsData {
         if (!cap.hasToggled(JJKAbilities.WHEEL.get()) || (cap.hasToggled(JJKAbilities.DOMAIN_AMPLIFICATION.get()) && cap.getExperience() < ConfigHolder.SERVER.requiredExperienceForExperienced.get().floatValue()) ) {
             this.adapting.clear();
             this.adapted.clear();
+            this.adaptationProgress.clear();
+            this.adaptationTickBuffer.clear();
+            this.adaptationLastCombatTick.clear();
             return;
         } else if (cap.hasToggled(JJKAbilities.DOMAIN_AMPLIFICATION.get()   ) && cap.getExperience() >= ConfigHolder.SERVER.requiredExperienceForExperienced.get().floatValue()) {
             return;
         }
         
-        
+        long gameTime = this.owner.level().getGameTime();
 
         Iterator<Map.Entry<Adaptation, Integer>> iter = this.adapting.entrySet().iterator();
   
         while (iter.hasNext()) {
             Map.Entry<Adaptation, Integer> entry = iter.next();
-
-            int timer = entry.getValue();
-
-            int newtimer = timer+1;
-            entry.setValue(newtimer);      
-           
-            //  if (newtimer >= JJKConstants.REQUIRED_ADAPTATION * 0.2 && timer < JJKConstants.REQUIRED_ADAPTATION * 0.2) {
-            //     WheelEntity wheel = cap.getSummonByClass(WheelEntity.class);
-            //     if (wheel != null) {
-            //         wheel.spin();
-            //     }
-            // } else  if (newtimer >= JJKConstants.REQUIRED_ADAPTATION * 0.4 && timer < JJKConstants.REQUIRED_ADAPTATION * 0.4) {
-            //     WheelEntity wheel = cap.getSummonByClass(WheelEntity.class);
-            //     if (wheel != null) {
-            //         wheel.spin();
-            //     }
-            // } else  if (newtimer >= JJKConstants.REQUIRED_ADAPTATION * 0.6 && timer < JJKConstants.REQUIRED_ADAPTATION * 0.6) {
-            //     WheelEntity wheel = cap.getSummonByClass(WheelEntity.class);
-            //     if (wheel != null) {
-            //         wheel.spin();
-            //     }  
-            // } else  if (newtimer >= JJKConstants.REQUIRED_ADAPTATION * 0.8 && timer < JJKConstants.REQUIRED_ADAPTATION * 0.8) {
-            //     WheelEntity wheel = cap.getSummonByClass(WheelEntity.class);
-            //     if (wheel != null) {
-            //         wheel.spin();
-            //     }  
-            // }
-            if (++timer >= JJKConstants.REQUIRED_ADAPTATION) {
+            Adaptation adaptation = entry.getKey();
+            if (adaptation == null) {
                 iter.remove();
-                  this.owner.level().playSound(null, this.owner.getX(), this.owner.getY(), this.owner.getZ(), SoundEvents.ANVIL_PLACE, SoundSource.MASTER, 3.0F, 1.0F);
+                continue;
+            }
 
-                //this.adapted.add(entry.getKey());
+            if (this.isFullyAdapted(adaptation)) {
+                iter.remove();
+                continue;
+            }
 
-                // if (this.owner instanceof MahoragaEntity mahoraga) {
-                //     if (!this.adapted.containsKey(entry.getKey())) {
-                //         mahoraga.onAdaptation();
-                //     }
-                // }
-                this.adapted.put(entry.getKey(), this.adapted.getOrDefault(entry.getKey(), 0) + 1);
+            int buffer = this.adaptationTickBuffer.getOrDefault(adaptation, 0) + 1;
+            boolean completed = false;
+            while (buffer >= PROGRESS_INTERVAL_TICKS) {
+                buffer -= PROGRESS_INTERVAL_TICKS;
+                float previous = this.getProgress(adaptation);
+                float next = this.clampProgress(previous + PROGRESS_STEP);
+                this.setProgress(adaptation, next);
+                if (next >= 1.0F && previous < 1.0F) {
+                    completed = true;
+                    iter.remove();
+                    this.owner.level().playSound(null, this.owner.getX(), this.owner.getY(), this.owner.getZ(), SoundEvents.ANVIL_PLACE, SoundSource.MASTER, 3.0F, 1.0F);
+                    break;
+                }
+            }
+            this.adaptationTickBuffer.put(adaptation, buffer);
+            entry.setValue(Math.round(this.getProgress(adaptation) * JJKConstants.REQUIRED_ADAPTATION));
 
+            if (completed) {
                 WheelEntity wheel = cap.getSummonByClass(WheelEntity.class);
-
                 if (wheel != null) {
                     wheel.spin();
                 }
-            } else {
-                entry.setValue(timer);
             }
         }
+
+        Set<Adaptation> tracked = new HashSet<>(this.adaptationProgress.keySet());
+        for (Adaptation adaptation : tracked) {
+            if (this.adapting.containsKey(adaptation)) {
+                continue;
+            }
+            long lastCombat = this.adaptationLastCombatTick.getOrDefault(adaptation, gameTime);
+            long idleTicks = gameTime - lastCombat;
+            if (idleTicks <= DECAY_DELAY_TICKS) {
+                continue;
+            }
+
+            int buffer = this.adaptationTickBuffer.getOrDefault(adaptation, 0) + 1;
+            while (buffer >= DECAY_INTERVAL_TICKS) {
+                buffer -= DECAY_INTERVAL_TICKS;
+                this.setProgress(adaptation, this.getProgress(adaptation) - DECAY_STEP);
+            }
+
+            if (!this.adaptationProgress.containsKey(adaptation)) {
+                this.adapting.remove(adaptation);
+                this.adaptationTickBuffer.remove(adaptation);
+                this.adaptationLastCombatTick.remove(adaptation);
+                this.adapted.remove(adaptation);
+                continue;
+            }
+
+            this.adaptationTickBuffer.put(adaptation, buffer);
+        }
+
         Iterator<Map.Entry<Adaptation, Integer>> cdIter = this.adaptationCD.entrySet().iterator();
         while (cdIter.hasNext()) {
             Map.Entry<Adaptation, Integer> cdEntry = cdIter.next();
@@ -265,7 +325,7 @@ public class TenShadowsData implements ITenShadowsData {
 
     @Override
     public float getAdaptationProgress(Adaptation adaptation) {
-        return this.adapted.containsKey(adaptation) ? 1.0F : (float) this.adapting.getOrDefault(adaptation, 0) / JJKConstants.REQUIRED_ADAPTATION;
+        return this.getProgress(adaptation);
     }
 
     @Override
@@ -323,13 +383,14 @@ public class TenShadowsData implements ITenShadowsData {
             }
         }
         Adaptation adaptation = this.getAdaptation(source);
-        return this.adapted.containsKey(adaptation);
+        return this.isFullyAdapted(adaptation);
     }
 
     @Override
     public boolean isAdaptedTo(Ability ability) {
-        for (Adaptation adapted : this.adapted.keySet() ) {
-            Ability current = adapted.getAbility();
+        for (Adaptation adaptation : this.adaptationProgress.keySet() ) {
+            if (!this.isFullyAdapted(adaptation)) continue;
+            Ability current = adaptation.getAbility();
 
             if (current == null) continue;
 
@@ -369,35 +430,15 @@ public class TenShadowsData implements ITenShadowsData {
         if (this.adaptationCD.containsKey(adaptation)) {
             return;
         }
+        long gameTime = this.owner.level().getGameTime();
+        this.adaptationLastCombatTick.put(adaptation, gameTime);
+        this.adaptationProgress.putIfAbsent(adaptation, this.clampProgress((float) this.adapting.getOrDefault(adaptation, 0) / JJKConstants.REQUIRED_ADAPTATION));
+        this.adaptationTickBuffer.putIfAbsent(adaptation, 0);
         if (!this.adapting.containsKey(adaptation)) {
             this.adapting.put(adaptation, 0);    
         } else {
             int timer = this.adapting.get(adaptation); 
-            //int oldtimer = timer;
-               timer += JJKConstants.ADAPTATION_STEP;
-             // ISorcererData cap = this.owner.getCapability(SorcererDataHandler.INSTANCE).resolve().orElseThrow();
-            //  if (timer >= JJKConstants.REQUIRED_ADAPTATION  *0.2 && oldtimer < JJKConstants.REQUIRED_ADAPTATION * 0.2) {
-            //     WheelEntity wheel = cap.getSummonByClass(WheelEntity.class);
-            //     if (wheel != null) {
-            //         wheel.spin();
-            //     }
-            // } else  if (timer >= JJKConstants.REQUIRED_ADAPTATION * 0.4 && oldtimer < JJKConstants.REQUIRED_ADAPTATION * 0.4) {
-            //     WheelEntity wheel = cap.getSummonByClass(WheelEntity.class);
-            //     if (wheel != null) {
-            //         wheel.spin();
-            //     }
-            // } else  if (timer >= JJKConstants.REQUIRED_ADAPTATION * 0.6 && oldtimer < JJKConstants.REQUIRED_ADAPTATION * 0.6) {
-            //     WheelEntity wheel = cap.getSummonByClass(WheelEntity.class);
-            //     if (wheel != null) {
-            //         wheel.spin();
-            //     }  
-            // } else  if (timer >= JJKConstants.REQUIRED_ADAPTATION * 0.8 && oldtimer < JJKConstants.REQUIRED_ADAPTATION * 0.8) {
-            //     WheelEntity wheel = cap.getSummonByClass(WheelEntity.class);
-            //     if (wheel != null) {
-            //         wheel.spin();
-            //     }  
-            // }
-         
+            timer += JJKConstants.ADAPTATION_STEP;
             this.adapting.put(adaptation, timer);
         }
          this.adaptationCD.put(adaptation, JJKConstants.ADAPT_CD_TIME);
@@ -415,37 +456,15 @@ public class TenShadowsData implements ITenShadowsData {
         if (this.adaptationCD.containsKey(adaptation)) {
             return;
         }
+        long gameTime = this.owner.level().getGameTime();
+        this.adaptationLastCombatTick.put(adaptation, gameTime);
+        this.adaptationProgress.putIfAbsent(adaptation, this.clampProgress((float) this.adapting.getOrDefault(adaptation, 0) / JJKConstants.REQUIRED_ADAPTATION));
+        this.adaptationTickBuffer.putIfAbsent(adaptation, 0);
         if (!this.adapting.containsKey(adaptation)) {
             this.adapting.put(adaptation, 0);
         } else {
             int timer = this.adapting.get(adaptation);
-        //  int oldtimer = timer;
             timer += JJKConstants.ADAPTATION_STEP;
-          
-              //ISorcererData cap = this.owner.getCapability(SorcererDataHandler.INSTANCE).resolve().orElseThrow();
-                   
-            //   if (timer >= JJKConstants.REQUIRED_ADAPTATION * 0.2 && oldtimer < JJKConstants.REQUIRED_ADAPTATION * 0.2) {
-            //     WheelEntity wheel = cap.getSummonByClass(WheelEntity.class);
-            //     if (wheel != null) {
-            //         wheel.spin();
-            //     }
-            // } else  if (timer >= JJKConstants.REQUIRED_ADAPTATION * 0.4 && oldtimer < JJKConstants.REQUIRED_ADAPTATION * 0.4) {
-            //     WheelEntity wheel = cap.getSummonByClass(WheelEntity.class);
-            //     if (wheel != null) {
-            //         wheel.spin();
-            //     }
-            // } else  if (timer >= JJKConstants.REQUIRED_ADAPTATION * 0.6 && oldtimer < JJKConstants.REQUIRED_ADAPTATION * 0.6) {
-            //     WheelEntity wheel = cap.getSummonByClass(WheelEntity.class);
-            //     if (wheel != null) {
-            //         wheel.spin();
-            //     }  
-            // } else  if (timer >= JJKConstants.REQUIRED_ADAPTATION * 0.8 && oldtimer < JJKConstants.REQUIRED_ADAPTATION * 0.8) {
-            //     WheelEntity wheel = cap.getSummonByClass(WheelEntity.class);
-            //     if (wheel != null) {
-            //         wheel.spin();
-            //     }  
-            // }
-      
             this.adapting.put(adaptation, timer);
         }
            this.adaptationCD.put(adaptation, JJKConstants.ADAPT_CD_TIME);
@@ -492,15 +511,29 @@ public class TenShadowsData implements ITenShadowsData {
         }
         nbt.put("adapted", adaptedTag);
 
-        // ListTag adaptingTag = new ListTag();
+        ListTag adaptingTag = new ListTag();
+        for (Map.Entry<Adaptation, Integer> entry : this.adapting.entrySet()) {
+            CompoundTag data = new CompoundTag();
+            data.put("adaptation", entry.getKey().serializeNBT());
+            data.putInt("stage", entry.getValue());
+            adaptingTag.add(data);
+        }
+        nbt.put("adapting", adaptingTag);
 
-        // for (Map.Entry<Adaptation, Integer> entry : this.adapting.entrySet()) {
-        //     CompoundTag data = new CompoundTag();
-        //     data.put("adaptation", entry.getKey().serializeNBT());
-        //     data.putInt("stage", entry.getValue());
-        //     adaptingTag.add(data);
-        // }
-        //nbt.put("adapting", adaptingTag);
+        ListTag adaptationProgressTag = new ListTag();
+        for (Map.Entry<Adaptation, Float> entry : this.adaptationProgress.entrySet()) {
+            Adaptation adaptation = entry.getKey();
+            if (adaptation == null || (adaptation.getAbility() == null && adaptation.getKey() == null)) {
+                continue;
+            }
+            CompoundTag data = new CompoundTag();
+            data.put("adaptation", adaptation.serializeNBT());
+            data.putFloat("progress", this.clampProgress(entry.getValue()));
+            data.putLong("lastCombat", this.adaptationLastCombatTick.getOrDefault(adaptation, 0L));
+            data.putInt("buffer", this.adaptationTickBuffer.getOrDefault(adaptation, 0));
+            adaptationProgressTag.add(data);
+        }
+        nbt.put("adaptation_progress", adaptationProgressTag);
 
         ListTag shadowInventoryTag = new ListTag();
 
@@ -529,24 +562,51 @@ public class TenShadowsData implements ITenShadowsData {
         }
 
         this.adapted.clear();
+        this.adapting.clear();
+        this.adaptationProgress.clear();
+        this.adaptationTickBuffer.clear();
+        this.adaptationLastCombatTick.clear();
 
-        
-        for (Tag key : nbt.getList("adapted", Tag.TAG_COMPOUND)) {
-            CompoundTag DATA = (CompoundTag) key;
-            this.adapted.put(   new Adaptation(DATA.getCompound("adaptation")), DATA.getInt("stage"));
+        if (nbt.contains("adaptation_progress", Tag.TAG_LIST)) {
+            for (Tag key : nbt.getList("adaptation_progress", Tag.TAG_COMPOUND)) {
+                CompoundTag data = (CompoundTag) key;
+                Adaptation adaptation = new Adaptation(data.getCompound("adaptation"));
+                if (adaptation.getAbility() == null && adaptation.getKey() == null) continue;
+                float progress = this.clampProgress(data.getFloat("progress"));
+                if (progress <= 0.0F) continue;
+                this.adaptationProgress.put(adaptation, progress);
+                this.adaptationLastCombatTick.put(adaptation, data.getLong("lastCombat"));
+                this.adaptationTickBuffer.put(adaptation, Math.max(0, data.getInt("buffer")));
+                if (progress >= 1.0F) {
+                    this.adapted.put(adaptation, 1);
+                } else {
+                    this.adapting.put(adaptation, Math.round(progress * JJKConstants.REQUIRED_ADAPTATION));
+                }
+            }
+        } else {
+            for (Tag key : nbt.getList("adapted", Tag.TAG_COMPOUND)) {
+                CompoundTag data = (CompoundTag) key;
+                Adaptation adaptation = new Adaptation(data.getCompound("adaptation"));
+                if (adaptation.getAbility() == null && adaptation.getKey() == null) continue;
+                this.adapted.put(adaptation, data.getInt("stage"));
+                this.adaptationProgress.put(adaptation, 1.0F);
+                this.adaptationTickBuffer.put(adaptation, 0);
+                this.adaptationLastCombatTick.put(adaptation, 0L);
+            }
+
+            for (Tag key : nbt.getList("adapting", Tag.TAG_COMPOUND)) {
+                CompoundTag data = (CompoundTag) key;
+                Adaptation adaptation = new Adaptation(data.getCompound("adaptation"));
+                if (adaptation.getAbility() == null && adaptation.getKey() == null) continue;
+                int timer = Math.max(0, data.getInt("stage"));
+                float progress = this.clampProgress((float) timer / JJKConstants.REQUIRED_ADAPTATION);
+                if (progress <= 0.0F) continue;
+                this.adapting.put(adaptation, timer);
+                this.adaptationProgress.put(adaptation, progress);
+                this.adaptationTickBuffer.put(adaptation, 0);
+                this.adaptationLastCombatTick.put(adaptation, 0L);
+            }
         }
-
-        this.adapted.entrySet().removeIf(entry ->
-            entry.getKey() == null ||
-            entry.getKey().getAbility() == null && entry.getKey().getKey() == null
-        );
-
-        // this.adapting.clear();
-
-        // for (Tag key : nbt.getList("adapting", Tag.TAG_COMPOUND)) {
-        //     CompoundTag adaptation = (CompoundTag) key;
-        //     this.adapting.put(new Adaptation(adaptation.getCompound("adaptation")), adaptation.getInt("stage"));
-        // }
 
         this.shadowInventory.clear();
 
